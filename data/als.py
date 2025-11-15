@@ -22,6 +22,7 @@ top_10_items = item_popularity.head(10)
 
 # Function for baseline recommendations (item popularity)
 def get_popularity_recommendations(user_id, top_items, user_interactions):
+    interacted_items = set(user_interactions.get(user_id, []))
     recommendations = [item for item in top_items.index if item not in interacted_items][:10]
     return recommendations  # Return list for evaluation; join to string later
 
