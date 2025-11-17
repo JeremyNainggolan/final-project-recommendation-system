@@ -38,10 +38,6 @@ cols = [item_id_to_idx[iid] for iid in train_df['item_id']]
 data = [1] * len(train_df)
 user_item_matrix = csr_matrix((data, (rows, cols)), shape=(len(user_ids), len(item_ids)))
 
-# Train ALS model (tuned parameters; adjust as needed)
-model = AlternatingLeastSquares(factors=128, regularization=0.01, iterations=20, alpha=40)
-model.fit(user_item_matrix)
-
 # Function for ALS recommendations
 def get_als_recommendations(user_id, model, user_item_matrix, user_id_to_idx, idx_to_item_id, user_interactions, top_items):
     if user_id not in user_id_to_idx:
@@ -109,41 +105,72 @@ cols_train = [item_id_to_idx[iid] for iid in train_df_filtered['item_id']]
 data_train = [1] * len(train_df_filtered)
 user_item_matrix_train = csr_matrix((data_train, (rows_train, cols_train)), shape=(len(user_ids), len(item_ids)))
 
-# Retrain ALS on filtered train data
+# Hyperparameter tuning for ALS
+# Define parameter grids (reduced for efficiency; expand if needed)
+factors_list = [64, 128, 256]
+regularization_list = [0.001, 0.01, 0.1]
+iterations_list = [10, 20, 30]
+alpha_list = [20, 40, 80]
+
+best_params = None
+best_score = 0.0
+
+print("Starting hyperparameter tuning...")
+for factors in factors_list:
+    for reg in regularization_list:
+        for iters in iterations_list:
+            for alpha in alpha_list:
+                print(f"Testing: factors={factors}, reg={reg}, iters={iters}, alpha={alpha}")
+                model = AlternatingLeastSquares(factors=factors, regularization=reg, iterations=iters, alpha=alpha, random_state=42)
+                model.fit(user_item_matrix_train)
+                
+                # Generate recommendations for validation users
+                als_recommendations = {}
+                for user_id in validation_ground_truth.keys():
+                    als_recommendations[user_id] = get_als_recommendations(user_id, model, user_item_matrix_train, user_id_to_idx, idx_to_item_id, train_interactions, top_10_items)
+                
+                # Evaluate
+                als_map10 = mean_average_precision_at_k(als_recommendations, validation_ground_truth, k=10)
+                print(f"MAP@10: {als_map10:.4f}")
+                
+                if als_map10 > best_score:
+                    best_score = als_map10
+                    best_params = {'factors': factors, 'regularization': reg, 'iterations': iters, 'alpha': alpha}
+
+print(f"Best params: {best_params}, Best MAP@10: {best_score:.4f}")
+
+# Use best params for final model
+model = AlternatingLeastSquares(**best_params, random_state=42)
 model.fit(user_item_matrix_train)
 
-# Generate recommendations for validation users
-baseline_recommendations = {}
+# Evaluate best model on validation
 als_recommendations = {}
 for user_id in validation_ground_truth.keys():
-    baseline_recommendations[user_id] = get_popularity_recommendations(user_id, top_10_items, train_interactions)
     als_recommendations[user_id] = get_als_recommendations(user_id, model, user_item_matrix_train, user_id_to_idx, idx_to_item_id, train_interactions, top_10_items)
 
-# Evaluate on validation set
-baseline_map10 = mean_average_precision_at_k(baseline_recommendations, validation_ground_truth, k=10)
 als_map10 = mean_average_precision_at_k(als_recommendations, validation_ground_truth, k=10)
 
+# Baseline for comparison
+baseline_recommendations = {}
+for user_id in validation_ground_truth.keys():
+    baseline_recommendations[user_id] = get_popularity_recommendations(user_id, top_10_items, train_interactions)
+
+baseline_map10 = mean_average_precision_at_k(baseline_recommendations, validation_ground_truth, k=10)
+
 print(f"Baseline MAP@10: {baseline_map10:.4f}")
-print(f"ALS MAP@10: {als_map10:.4f}")
+print(f"Optimized ALS MAP@10: {als_map10:.4f}")
 
 # Generate full recommendations for test users (using original train data)
 # Retrain ALS on full train data for final submission
 model.fit(user_item_matrix)
 
-baseline_submission = []
 als_submission = []
 for user_id in test_users_df['user_id']:
-    baseline_recs = get_popularity_recommendations(user_id, top_10_items, user_interactions)
     als_recs = get_als_recommendations(user_id, model, user_item_matrix, user_id_to_idx, idx_to_item_id, user_interactions, top_10_items)
-    
-    baseline_submission.append({'user_id': user_id, 'item_id': ' '.join(baseline_recs)})
-    als_submission.append({'user_id': user_id, 'item_id': ' '.join(als_recs)})
+    als_submission.append({'user_id': user_id, 'item_id': ' '.join(map(str, als_recs))})
 
-# Save submissions
-baseline_df = pd.DataFrame(baseline_submission)
-baseline_df.to_csv('/baseline_submission.csv', index=False)
-
+# Save submission
 als_df = pd.DataFrame(als_submission)
-als_df.to_csv('/als_submission.csv', index=False)
+als_df.to_csv('/optimized_als_submission.csv', index=False)
 
-print("Submissions saved: /baseline_submission.csv and /als_submission.csv")
+print("Optimized ALS submission saved: /optimized_als_submission.csv")
