@@ -9,9 +9,9 @@ random.seed(42)
 np.random.seed(42)
 
 # Load data
-train_df = pd.read_csv('./data/train.csv')
-test_users_df = pd.read_csv('./data/data_target_users_test.csv')
-sample_submission_df = pd.read_csv('./data/sample_submission.csv')  # For reference
+train_df = pd.read_csv('train.csv')
+test_users_df = pd.read_csv('data_target_users_test.csv')
+sample_submission_df = pd.read_csv('sample_submission.csv')  # For reference
 
 # Preprocessing: Prepare user interactions dict
 user_interactions = train_df.groupby('user_id')['item_id'].apply(list).to_dict()
@@ -38,8 +38,16 @@ cols = [item_id_to_idx[iid] for iid in train_df['item_id']]
 data = [1] * len(train_df)
 user_item_matrix = csr_matrix((data, (rows, cols)), shape=(len(user_ids), len(item_ids)))
 
-# Train ALS model (tuned parameters; adjust as needed)
-model = AlternatingLeastSquares(factors=128, regularization=0.01, iterations=20, alpha=40)
+# --- PERUBAHAN DI SINI (SET 3) ---
+# Train ALS model (tuned parameters; Set 3)
+model_params = {
+    'factors': 64,         # Lebih rendah untuk generalisasi
+    'regularization': 0.05,  # Nilai regularisasi yang berbeda
+    'iterations': 25,      # Iterasi yang cukup
+    'alpha': 25            # Nilai confidence yang berbeda
+}
+model = AlternatingLeastSquares(**model_params)
+# ---------------------------------
 model.fit(user_item_matrix)
 
 # Function for ALS recommendations
@@ -68,19 +76,9 @@ def average_precision_at_k(recommended, relevant, k=10):
             precision_at_i = num_relevant / (i + 1)
             ap += precision_at_i
     
-    # Original formula divides by min(k, len(relevant)), but for MAP@k,
-    # it's common to divide by the number of relevant items found in top k,
-    # or just the total number of relevant items.
-    # Let's use a common implementation: divide by number of relevant items in top k.
     num_relevant_in_top_k = sum(1 for item in recommended[:k] if item in relevant)
     if num_relevant_in_top_k == 0:
         return 0.0
-    
-    # If the provided implementation in the file was intended, 
-    # and `relevant` is the *full* set of relevant items (not just top-k),
-    # then dividing by min(k, len(relevant)) is also standard.
-    # The file's original logic was: ap / num_relevant_in_top_k
-    # We will stick to the file's original logic.
     return ap / num_relevant_in_top_k
 
 def mean_average_precision_at_k(recommendations, ground_truth, k=10):
@@ -111,7 +109,6 @@ for user_id, items in user_interactions.items():
 train_df_filtered = []
 for user_id, items in train_interactions.items():
     for item in items:
-        # Ensure item is in the map (it should be, as it's from train_df)
         if item in item_id_to_idx:
             train_df_filtered.append({'user_id': user_id, 'item_id': item})
 train_df_filtered = pd.DataFrame(train_df_filtered)
@@ -122,42 +119,43 @@ data_train = [1] * len(train_df_filtered)
 user_item_matrix_train = csr_matrix((data_train, (rows_train, cols_train)), shape=(len(user_ids), len(item_ids)))
 
 # Retrain ALS on filtered train data
-model.fit(user_item_matrix_train)
+# --- PERUBAHAN DI SINI (SET 3) ---
+model_eval = AlternatingLeastSquares(**model_params)
+# ---------------------------------
+model_eval.fit(user_item_matrix_train)
 
 # Generate recommendations for validation users
 baseline_recommendations = {}
 als_recommendations = {}
 for user_id in validation_ground_truth.keys():
     baseline_recommendations[user_id] = get_popularity_recommendations(user_id, top_10_items, train_interactions)
-    als_recommendations[user_id] = get_als_recommendations(user_id, model, user_item_matrix_train, user_id_to_idx, idx_to_item_id, train_interactions, top_10_items)
+    als_recommendations[user_id] = get_als_recommendations(user_id, model_eval, user_item_matrix_train, user_id_to_idx, idx_to_item_id, train_interactions, top_10_items)
 
+# Evaluate on validation set
+baseline_map10 = mean_average_precision_at_k(baseline_recommendations, validation_ground_truth, k=10)
 als_map10 = mean_average_precision_at_k(als_recommendations, validation_ground_truth, k=10)
 
-# Baseline for comparison
-baseline_recommendations = {}
-for user_id in validation_ground_truth.keys():
-    baseline_recommendations[user_id] = get_popularity_recommendations(user_id, top_10_items, train_interactions)
-
-baseline_map10 = mean_average_precision_at_k(baseline_recommendations, validation_ground_truth, k=10)
-
-print(f"Baseline MAP@10: {baseline_map10:.4f}")
-print(f"ALS MAP@10: {als_map10:.4f}")
+print(f"Baseline MAP@10 (Validation): {baseline_map10:.4f}")
+print(f"ALS (Set 3) MAP@10 (Validation): {als_map10:.4f}")
 
 # Generate full recommendations for test users (using original train data)
-# Retrain ALS on full train data for final submission
 # (We already trained 'model' on the full user_item_matrix at the beginning)
 
+baseline_submission = []
 als_submission = []
 for user_id in test_users_df['user_id']:
     baseline_recs = get_popularity_recommendations(user_id, top_10_items, user_interactions)
+    # Use the 'model' trained on the full dataset
     als_recs = get_als_recommendations(user_id, model, user_item_matrix, user_id_to_idx, idx_to_item_id, user_interactions, top_10_items)
-    als_submission.append({'user_id': user_id, 'item_id': ' '.join(map(str, als_recs))})
+    
+    baseline_submission.append({'user_id': user_id, 'item_id': ' '.join(baseline_recs)})
+    als_submission.append({'user_id': user_id, 'item_id': ' '.join(als_recs)})
 
 # Save submissions
 baseline_df = pd.DataFrame(baseline_submission)
-baseline_df.to_csv('/baseline_submission.csv', index=False)
+baseline_df.to_csv('./baseline_submission.csv', index=False)
 
 als_df = pd.DataFrame(als_submission)
-als_df.to_csv('/als_submission.csv', index=False)
+als_df.to_csv('./als_submission_set3.csv', index=False) # Ganti nama file
 
-print("Submissions saved: /baseline_submission.csv and /als_submission.csv")
+print("Submissions saved: ./baseline_submission.csv and ./als_submission_set3.csv")
